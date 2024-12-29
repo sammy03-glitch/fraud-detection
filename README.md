@@ -20,28 +20,30 @@ Steps:
 1. Clone the repository:
 
    git clone https://github.com/therealdope/Credit_Card_Fraud_Detection_Website.git
+   
    cd Credit_Card_Fraud_Detection_Website
 
-2. Set up Python environment:
+3. Set up Python environment:
 
    python -m venv env
+   
    source env/bin/activate   #On Windows use `env\Scripts\activate`
 
-3. Install dependencies:
+5. Install dependencies:
 
    pip install -r requirements.txt
 
-4. Download the dataset:
+6. Download the dataset:
 
    - The dataset used in this project is not included in the repository due to size constraints.
    - Download the dataset from https://drive.google.com/file/d/1GNxFy8jlTZQLny81XoaYOqfQDQWNFQgh/view?usp=sharing and place it in a directory (data/) in the root of your project.
 
-5. Set up MongoDB:
+7. Set up MongoDB:
 
    - Install MongoDB on your local machine or use a cloud-based MongoDB service.
    - Configure MongoDB connection URI in app.py or a separate configuration file.
 
-6. Run the application:
+8. Run the application:
 
    python app.py or flask run
 
