@@ -27,7 +27,7 @@ Steps:
 
    python -m venv env
    
-   source env/bin/activate   #On Windows use `env\Scripts\activate`
+   source `env/bin/activate`   #On Windows use `env\Scripts\activate`
 
 5. Install dependencies:
 
