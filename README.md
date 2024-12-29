@@ -20,12 +20,12 @@ Steps:
 1. Clone the repository:
 
    git clone https://github.com/therealdope/Credit_Card_Fraud_Detection_Website.git
-   cd Credit-Card-Fraud-Detection
+   cd Credit_Card_Fraud_Detection_Website
 
 2. Set up Python environment:
 
    python -m venv env
-   source env/bin/activate  # On Windows use `env\Scripts\activate`
+   source env/bin/activate   #On Windows use `env\Scripts\activate`
 
 3. Install dependencies:
 
