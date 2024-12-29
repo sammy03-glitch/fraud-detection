@@ -19,7 +19,7 @@ Prerequisites:
 Steps:
 1. Clone the repository:
 
-   git clone https://github.com/valakalpesh/Credit-Card-Fraud-Detection.git
+   git clone https://github.com/therealdope/Credit_Card_Fraud_Detection_Website.git
    cd Credit-Card-Fraud-Detection
 
 2. Set up Python environment:
