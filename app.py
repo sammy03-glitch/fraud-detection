@@ -1,4 +1,6 @@
 import pandas as pd
+import os
+from dotenv import load_dotenv
 from flask import Flask, render_template, request, redirect, url_for, session, flash
 from pymongo import MongoClient
 import bcrypt
@@ -17,8 +19,10 @@ app.secret_key = b'_5#y2L"F4Q8z\n\xec]/'
 UPLOAD_FOLDER = 'uploads'
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
+load_dotenv()
+MONGO_URI = os.getenv("MONGO_URI")
 # Database
-client = MongoClient('<yourMongolink>')
+client = MongoClient(MONGO_URI)
 db = client['user_database']
 collection = db['users']
 
