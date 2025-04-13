@@ -2,10 +2,11 @@ Credit Card Fraud Detection with Flask and Machine Learning
 ===========================================================
 [![💳 LINK](https://img.shields.io/badge/💳-Visit%20Website-blue)](https://ccdf.onrender.com/)
 
+> due to some problem in render, ML model may not work in Website but locally it works fine.
+
 ## Video Preview
 
-[![Watch the video](https://img.youtube.com/vi/f4Rxvy8E61E/0.jpg)](https://youtu.be/f4Rxvy8E61E)
-This project combines web development with Flask as a backend, HTML/CSS/JS for frontend, MongoDB as the database, and machine learning models for credit card fraud detection.
+[![Watch the video](https://img.youtube.com/vi/q8WpF-j_wsE/0.jpg)](https://youtu.be/q8WpF-j_wsE)
 
 Project Overview
 ----------------

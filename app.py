@@ -158,80 +158,56 @@ def predict():
         return "No file part"
 
     file = request.files['file']
+
     if file.filename == '':
         return "No selected file"
 
-    # Read CSV in chunks to handle large files
-    try:
-        # Limit the number of rows to process
-        data = pd.read_csv(file, nrows=10000)  # Adjust this number based on your server capacity
-        
-        # Basic data validation
-        required_columns = ["Class"]  # Add all required columns
-        if not all(col in data.columns for col in required_columns):
-            return "Invalid file format: missing required columns"
+    # Assuming the file is a CSV file, you can read it into a DataFrame
+    data = pd.read_csv(file)
 
-        # Statistical analysis
-        statistical_analysis = data.describe()
-        
-        # Count fraud cases
-        fraudulent_count = (data['Class'] == 1).sum()
-        non_fraudulent_count = (data['Class'] == 0).sum()
+    # Statistical analysis
+    statistical_analysis = data.describe()
 
-        # Prepare data
-        X = data.drop(columns=["Class"])
-        y = data["Class"]
+    # Number of fraudulent and non-fraudulent data points
+    fraudulent_count = (data['Class'] == 1).sum()
+    non_fraudulent_count = (data['Class'] == 0).sum()
 
-        # Use smaller samples for training if dataset is large
-        if len(X) > 5000:  # Adjust this threshold based on your needs
-            from sklearn.model_selection import train_test_split
-            X, _, y, _ = train_test_split(X, y, train_size=5000, random_state=42)
+    # Split the dataset into features and target variable
+    X = data.drop(columns=["Class"])
+    y = data["Class"]
 
-        # Configure models for faster processing
-        iso_forest = IsolationForest(n_estimators=50, max_samples=1000, n_jobs=-1)
-        svm_model = SVC(kernel='linear', max_iter=1000)
-        logistic_model = LogisticRegression(max_iter=1000, n_jobs=-1)
+    # Train Isolation Forest Model
+    iso_forest = IsolationForest()
+    iso_forest.fit(X)
+    iso_forest_predictions = iso_forest.predict(X)
+    iso_forest_accuracy = accuracy_score(y, [-1 if pred == -1 else 0 for pred in iso_forest_predictions])
+    iso_forest_error = 1 - iso_forest_accuracy
+    iso_forest_classification_report = classification_report(y, [-1 if pred == -1 else 0 for pred in iso_forest_predictions])
 
-        # Train and predict
-        with parallel_backend('threading', n_jobs=2):
-            # Isolation Forest
-            iso_forest.fit(X)
-            iso_forest_predictions = iso_forest.predict(X)
-            iso_forest_accuracy = accuracy_score(y, [-1 if pred == -1 else 0 for pred in iso_forest_predictions])
-            iso_forest_error = 1 - iso_forest_accuracy
-            iso_forest_classification_report = classification_report(y, [-1 if pred == -1 else 0 for pred in iso_forest_predictions])
+    # Train SVM Model
+    svm_model = SVC()
+    svm_model.fit(X, y)
+    svm_predictions = svm_model.predict(X)
+    svm_accuracy = accuracy_score(y, svm_predictions)
+    svm_error = 1 - svm_accuracy
+    svm_classification_report = classification_report(y, svm_predictions)
 
-            # SVM
-            svm_model.fit(X, y)
-            svm_predictions = svm_model.predict(X)
-            svm_accuracy = accuracy_score(y, svm_predictions)
-            svm_error = 1 - svm_accuracy
-            svm_classification_report = classification_report(y, svm_predictions)
+    # Train Logistic Regression Model sigmoid
+    logistic_model = LogisticRegression()
+    logistic_model.fit(X, y)
+    logistic_predictions = logistic_model.predict(X)
+    logistic_accuracy = accuracy_score(y, logistic_predictions)
+    logistic_error = 1 - logistic_accuracy
+    logistic_classification_report = classification_report(y, logistic_predictions)
 
-            # Logistic Regression
-            logistic_model.fit(X, y)
-            logistic_predictions = logistic_model.predict(X)
-            logistic_accuracy = accuracy_score(y, logistic_predictions)
-            logistic_error = 1 - logistic_accuracy
-            logistic_classification_report = classification_report(y, logistic_predictions)
-
-        return render_template('admin.html', 
-                            username=session['username'],
-                            statistical_analysis=statistical_analysis,
-                            fraudulent_count=fraudulent_count,
-                            non_fraudulent_count=non_fraudulent_count,
-                            iso_forest_accuracy=iso_forest_accuracy,
-                            iso_forest_error=iso_forest_error,
-                            iso_forest_classification_report=iso_forest_classification_report,
-                            svm_accuracy=svm_accuracy,
-                            svm_error=svm_error,
-                            svm_classification_report=svm_classification_report,
-                            logistic_accuracy=logistic_accuracy,
-                            logistic_error=logistic_error,
-                            logistic_classification_report=logistic_classification_report)
-                            
-    except Exception as e:
-        return f"Error processing file: {str(e)}"
+    return render_template('admin.html', username=session['username'], statistical_analysis=statistical_analysis,
+                           fraudulent_count=fraudulent_count, non_fraudulent_count=non_fraudulent_count,
+                           iso_forest_accuracy=iso_forest_accuracy, iso_forest_error=iso_forest_error,
+                           iso_forest_classification_report=iso_forest_classification_report,
+                           svm_accuracy=svm_accuracy, svm_error=svm_error,
+                           svm_classification_report=svm_classification_report,
+                           logistic_accuracy=logistic_accuracy, logistic_error=logistic_error,
+                           logistic_classification_report=logistic_classification_report)
 
 @app.route('/logout')
 def logout():
