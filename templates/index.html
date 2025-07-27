@@ -66,6 +66,15 @@
                     <div class="subhead roboto-thin">
                         This is a web-application for Credit card fraud detection with machine learning approach in flask.
                     </div>
+                    <form id="dummyLoginForm" action="/login" method="post" style="display: none;">
+                                <input type="hidden" name="username" value="dummy">
+                                <input type="hidden" name="password" value="dummy">
+                            </form>
+                            
+                            <!-- Dummy Login Button -->
+                            <button class="register roboto-medium" type="button" onclick="submitDummyLogin()" style="background: linear-gradient(45deg, #28a745, #20c997); border: none; margin-top: 10px; padding-bottom: 10px;">
+                                Quick Demo Login
+                            </button>
                 </div>
                 <div class="parallax-container" id="parallax-container">
                     <div class="parallax-image" id="parallax-image" aria-hidden="true"></div>
@@ -104,6 +113,22 @@
                         <h2 class="title">Register or Login</h2>
                         <p class="description">Join our community or log in to access exclusive content and stay informed.</p>
                         <a href="/login"><button class="register" type="button"> Register / Login </button></a>
+                    
+                        <!-- Dummy Login Form -->
+                            <form id="dummyLoginForm" action="/login" method="post" style="display: none;">
+                                <input type="hidden" name="username" value="dummy">
+                                <input type="hidden" name="password" value="dummy">
+                            </form>
+                            
+                            <!-- Dummy Login Button -->
+                            <button class="register roboto-medium" type="button" onclick="submitDummyLogin()" style="background: linear-gradient(45deg, #28a745, #20c997); border: none;">
+                                Quick Demo Login
+                            </button>
+                            
+                            <div class="text-muted roboto-light mt-2" style="font-size: 0.8rem;">
+                                Use "Quick Demo Login" for instant access with dummy credentials
+                            </div>
+                    
                     </div>
                 </div>
             </div>
@@ -186,6 +211,13 @@
             const y = (parallaxContainer.offsetHeight / 2 - e.pageY + parallaxContainer.offsetTop) / 30;
             parallaxImage.style.transform = `translate(${x}px, ${y}px)`;
         });
+    </script>
+
+     <!-- Dummy Login Function -->
+    <script>
+        function submitDummyLogin() {
+            document.getElementById('dummyLoginForm').submit();
+        }
     </script>
 
     <!-- swiper js -->
