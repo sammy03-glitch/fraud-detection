@@ -109,7 +109,24 @@
                     <div class="col-md-6 containerR">
                         <h2 class="title roboto-medium">Register or Login by Other Account?</h2>
                         <p class="description roboto-light">Join our community or log in to access exclusive content and stay informed.</p>
-                        <a href="/login"><button class="register roboto-medium" type="button"> Register / Login </button></a>
+                        <div class="d-flex flex-column gap-3">
+                            <a href="/login"><button class="register roboto-medium" type="button"> Register / Login </button></a>
+                            
+                            <!-- Dummy Login Form -->
+                            <form id="dummyLoginForm" action="/login" method="post" style="display: none;">
+                                <input type="hidden" name="username" value="dummy">
+                                <input type="hidden" name="password" value="dummy">
+                            </form>
+                            
+                            <!-- Dummy Login Button -->
+                            <button class="register roboto-medium" type="button" onclick="submitDummyLogin()" style="background: linear-gradient(45deg, #28a745, #20c997); border: none;">
+                                <i class="fa fa-user-circle me-2"></i>Quick Demo Login
+                            </button>
+                            
+                            <small class="text-muted roboto-light" style="font-size: 0.8rem; text-align: center;">
+                                Use "Quick Demo Login" for instant access with dummy credentials
+                            </small>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -153,7 +170,7 @@
 
 
 
-    <!-- ................................script............................... -->
+    <!-- ................................script.............................. -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/twitter-bootstrap/5.3.0/js/bootstrap.bundle.min.js"></script>
 
     <!-- home section -->
@@ -166,6 +183,13 @@
             const y = (parallaxContainer.offsetHeight / 2 - e.pageY + parallaxContainer.offsetTop) / 30;
             parallaxImage.style.transform = `translate(${x}px, ${y}px)`;
         });
+    </script>
+
+    <!-- Dummy Login Function -->
+    <script>
+        function submitDummyLogin() {
+            document.getElementById('dummyLoginForm').submit();
+        }
     </script>
 
     <!-- swiper js -->
