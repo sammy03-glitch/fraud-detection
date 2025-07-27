@@ -73,6 +73,11 @@ def login():
         username = request.form.get('username')
         password = request.form.get('password')
 
+        # Allow dummy login without checking DB
+        if username == 'dummy' and password == 'dummy':
+            session['username'] = 'Demo User'
+            return redirect(url_for('dashboard', username='Demo User'))
+
         user = collection.find_one({'username': username})
 
         if user and 'password' in user and bcrypt.checkpw(password.encode('utf-8'), user['password']):
