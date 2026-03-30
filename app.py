@@ -1,223 +1,389 @@
 import pandas as pd
 import os
 from dotenv import load_dotenv
-from flask import Flask, render_template, request, redirect, url_for, session, flash
+from flask import Flask, request, session, jsonify
+from flask_cors import CORS
 from pymongo import MongoClient
 import bcrypt
 from sklearn.ensemble import IsolationForest
 from sklearn.svm import SVC
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, classification_report
-from werkzeug.utils import secure_filename
+import io
 
+# ─────────────────────────────────────────
+#  APP SETUP
+# ─────────────────────────────────────────
 app = Flask(__name__)
-
-# for security perpose
 app.secret_key = b'_5#y2L"F4Q8z\n\xec]/'
-        
-# Define the directory where uploaded files will be stored
-UPLOAD_FOLDER = 'uploads'
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+
+# CORS lets your Android app talk to Flask from a different device/IP
+# Without this, Android's HTTP requests would be blocked
+CORS(app)
 
 load_dotenv()
 MONGO_URI = os.getenv("MONGO_URI")
-# Database
+
+# ─────────────────────────────────────────
+#  DATABASE CONNECTION
+# ─────────────────────────────────────────
 client = MongoClient(MONGO_URI)
 db = client['user_database']
 collection = db['users']
 
 
+# ─────────────────────────────────────────
+#  HELPER — build a clean JSON response
+# ─────────────────────────────────────────
+def resp(data: dict, status: int = 200):
+    """Shortcut to return a JSON response with a status code."""
+    return jsonify(data), status
+
+
+# ═══════════════════════════════════════════════════════
+#  ROUTE 1 — Home  (just a health check)
+#  OLD: return render_template('index.html')
+#  NEW: return JSON confirming the server is alive
+# ═══════════════════════════════════════════════════════
 @app.route('/')
 def index():
-    return render_template('index.html')
+    return resp({"message": "Credit Card Fraud Detection API is running!"})
 
 
-@app.route('/register')
-def register_page():
-    return render_template('login.html')
-
-@app.route('/register', methods=['GET', 'POST'])
+# ═══════════════════════════════════════════════════════
+#  ROUTE 2 — Register
+#  METHOD: POST
+#  BODY (JSON): { "username": "...", "email": "...", "password": "..." }
+#  RETURNS:
+#    201 → { "status": "success", "message": "User registered successfully" }
+#    409 → { "status": "error",   "message": "Username already exists" }
+#    409 → { "status": "error",   "message": "Email already exists" }
+#    400 → { "status": "error",   "message": "Missing fields" }
+# ═══════════════════════════════════════════════════════
+@app.route('/register', methods=['POST'])
 def register():
-    if request.method == 'POST':
-        username = request.form['username']
-        password = request.form['password']
-        email = request.form['email']
+    # Get JSON data sent by Android
+    data = request.get_json()
 
-        hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
+    # Validate — make sure all fields are present
+    if not data:
+        return resp({"status": "error", "message": "No data received"}, 400)
 
-        if collection.find_one({'username': username}):
-            session['error'] = "Username already exists!"
-            return redirect(url_for('register_page'))
-        elif collection.find_one({'email': email}):
-            session['error'] = "Email already exists!"
-            return redirect(url_for('register_page'))
+    username = data.get('username', '').strip()
+    password = data.get('password', '').strip()
+    email    = data.get('email', '').strip()
 
-        user_data = {
-            'username': username,
-            'password': hashed_password,
-            'email': email
-        }
-        collection.insert_one(user_data)
+    if not username or not password or not email:
+        return resp({"status": "error", "message": "Missing fields"}, 400)
 
-        return redirect(url_for('login_page'))
+    # Check if username or email already exists in MongoDB
+    if collection.find_one({'username': username}):
+        return resp({"status": "error", "message": "Username already exists"}, 409)
 
-    return render_template("login.html")
+    if collection.find_one({'email': email}):
+        return resp({"status": "error", "message": "Email already exists"}, 409)
 
-@app.route('/login')
-def login_page():
-    return render_template("login.html")
+    # Hash the password before saving (NEVER save plain-text passwords!)
+    hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
 
+    # Save new user to MongoDB
+    collection.insert_one({
+        'username': username,
+        'password': hashed_password,
+        'email':    email
+    })
+
+    return resp({"status": "success", "message": "User registered successfully"}, 201)
+
+
+# ═══════════════════════════════════════════════════════
+#  ROUTE 3 — Login
+#  METHOD: POST
+#  BODY (JSON): { "username": "...", "password": "..." }
+#  RETURNS:
+#    200 → { "status": "success", "username": "john" }
+#    401 → { "status": "error",   "message": "Invalid username or password" }
+#    400 → { "status": "error",   "message": "Missing fields" }
+# ═══════════════════════════════════════════════════════
 @app.route('/login', methods=['POST'])
 def login():
-    if request.method == 'POST':
-        username = request.form.get('username')
-        password = request.form.get('password')
+    data = request.get_json()
 
-        # Allow dummy login without checking DB
-        if username == 'dummy' and password == 'dummy':
-            session['username'] = 'Demo User'
-            return redirect(url_for('dashboard', username='Demo User'))
+    if not data:
+        return resp({"status": "error", "message": "No data received"}, 400)
 
-        user = collection.find_one({'username': username})
+    username = data.get('username', '').strip()
+    password = data.get('password', '').strip()
 
-        if user and 'password' in user and bcrypt.checkpw(password.encode('utf-8'), user['password']):
-            session['username'] = user['username']
-            return redirect(url_for('dashboard', username=user['username']))
-        else:
-            session['error'] = "Invalid username or password"
-            return redirect(url_for('login_page'))
+    if not username or not password:
+        return resp({"status": "error", "message": "Missing fields"}, 400)
 
-# for security
-@app.route('/dashboard')
-def dashboard():
-    if 'username' in session:
-        username = session['username']
-        return render_template("dashboard.html", username=username)
+    # Allow dummy/demo login for quick testing (no DB needed)
+    if username == 'dummy' and password == 'dummy':
+        return resp({"status": "success", "username": "Demo User"})
+
+    # Look up the user in MongoDB
+    user = collection.find_one({'username': username})
+
+    # Check if user exists AND password matches the stored hash
+    if user and bcrypt.checkpw(password.encode('utf-8'), user['password']):
+        return resp({"status": "success", "username": user['username']})
     else:
-        return redirect(url_for('login_page'))
-    
-@app.route('/home')
-def home():
-    if 'username' in session:
-        username = session['username']
-        return render_template("home.html", username=username)
-    else:
-        return redirect(url_for('login_page'))
-    
-@app.route('/admin')
-def admin_page():
-    if 'username' in session:
-        username = session['username']
-        return render_template("admin.html", username=username)
-    else:
-        return redirect(url_for('login_page'))
-    
-
-@app.route('/profile')
-def profile_page():
-    if 'username' in session:
-        username = session['username']
-        # Fetch user data from the database
-        user_data = collection.find_one({'username': username})
-        if user_data:
-            # Pass user data to the template
-            return render_template("profile.html", username=username, user_data=user_data)
-        else:
-            return "User not found in database"
-    else:
-        return redirect(url_for('login_page'))
+        return resp({"status": "error", "message": "Invalid username or password"}, 401)
 
 
-# Add functionality to update user profile data in the database
-@app.route('/profile/update', methods=['POST'])
-def update_profile():
-    if 'username' in session:
-        username = session['username']
-        # Fetch user data from the form
-        first_name = request.form['first_name']
-        last_name = request.form['last_name']
-        organization_name = request.form['organization_name']
-        location = request.form['location']
-        phone_number = request.form['phone_number']
-        birthday = request.form['birthday']
-        
-        # Update user data in the database
-        collection.update_one({'username': username}, {'$set': {
-            'first_name': first_name,
-            'last_name': last_name,
-            'organization_name': organization_name,
-            'location': location,
-            'phone_number': phone_number,
-            'birthday': birthday
-        }})
-        
-        # Redirect to profile page
-        return redirect(url_for('profile_page'))
-    else:
-        return redirect(url_for('login_page'))
-
-
+# ═══════════════════════════════════════════════════════
+#  ROUTE 4 — Predict (the main ML route)
+#  METHOD: POST
+#  BODY: multipart/form-data  →  key="file", value=<CSV file>
+#        + form field          →  key="username", value="john"
+#  RETURNS: JSON with results from all 3 ML models
+# ═══════════════════════════════════════════════════════
 @app.route('/predict', methods=['POST'])
 def predict():
     if 'file' not in request.files:
-        return "No file part"
+        return resp({"status": "error", "message": "No file uploaded"}, 400)
 
     file = request.files['file']
 
     if file.filename == '':
-        return "No selected file"
+        return resp({"status": "error", "message": "No file selected"}, 400)
 
-    # Assuming the file is a CSV file, you can read it into a DataFrame
-    data = pd.read_csv(file)
+    try:
+        content = file.read()
+        data = pd.read_csv(io.BytesIO(content))
 
-    # Statistical analysis
-    statistical_analysis = data.describe()
+        if 'Class' not in data.columns:
+            return resp({
+                "status": "error",
+                "message": "CSV must have a 'Class' column"
+            }, 400)
 
-    # Number of fraudulent and non-fraudulent data points
-    fraudulent_count = (data['Class'] == 1).sum()
-    non_fraudulent_count = (data['Class'] == 0).sum()
+        # ── Basic statistics (full dataset) ──────────────
+        total_transactions   = len(data)
+        fraudulent_count     = int((data['Class'] == 1).sum())
+        non_fraudulent_count = int((data['Class'] == 0).sum())
 
-    # Split the dataset into features and target variable
-    X = data.drop(columns=["Class"])
-    y = data["Class"]
+        print(f"Dataset loaded: {total_transactions} rows, {fraudulent_count} fraud cases")
 
-    # Train Isolation Forest Model
-    iso_forest = IsolationForest()
-    iso_forest.fit(X)
-    iso_forest_predictions = iso_forest.predict(X)
-    iso_forest_accuracy = accuracy_score(y, [-1 if pred == -1 else 0 for pred in iso_forest_predictions])
-    iso_forest_error = 1 - iso_forest_accuracy
-    iso_forest_classification_report = classification_report(y, [-1 if pred == -1 else 0 for pred in iso_forest_predictions])
+        # ── Use a sample for training — much faster! ──────
+        # We take 10,000 rows but keep ALL fraud cases so models learn properly
+        fraud_data     = data[data['Class'] == 1]          # all 492 fraud rows
+        normal_data    = data[data['Class'] == 0].sample(  # 9508 normal rows
+                            n=min(9508, len(data[data['Class'] == 0])),
+                            random_state=42)
+        sample = pd.concat([fraud_data, normal_data]).sample(
+                            frac=1, random_state=42)       # shuffle
 
-    # Train SVM Model
-    svm_model = SVC()
-    svm_model.fit(X, y)
-    svm_predictions = svm_model.predict(X)
-    svm_accuracy = accuracy_score(y, svm_predictions)
-    svm_error = 1 - svm_accuracy
-    svm_classification_report = classification_report(y, svm_predictions)
+        X = sample.drop(columns=["Class"])
+        y = sample["Class"]
 
-    # Train Logistic Regression Model sigmoid
-    logistic_model = LogisticRegression()
-    logistic_model.fit(X, y)
-    logistic_predictions = logistic_model.predict(X)
-    logistic_accuracy = accuracy_score(y, logistic_predictions)
-    logistic_error = 1 - logistic_accuracy
-    logistic_classification_report = classification_report(y, logistic_predictions)
+        print(f"Training on {len(sample)} rows (all fraud + sample of normal)...")
 
-    return render_template('admin.html', username=session['username'], statistical_analysis=statistical_analysis,
-                           fraudulent_count=fraudulent_count, non_fraudulent_count=non_fraudulent_count,
-                           iso_forest_accuracy=iso_forest_accuracy, iso_forest_error=iso_forest_error,
-                           iso_forest_classification_report=iso_forest_classification_report,
-                           svm_accuracy=svm_accuracy, svm_error=svm_error,
-                           svm_classification_report=svm_classification_report,
-                           logistic_accuracy=logistic_accuracy, logistic_error=logistic_error,
-                           logistic_classification_report=logistic_classification_report)
+        # ── Model 1: Isolation Forest (~10 seconds) ───────
+        print("Training Isolation Forest...")
+        iso = IsolationForest(random_state=42, contamination=0.05)
+        iso.fit(X)
+        iso_preds = [0 if p == 1 else 1 for p in iso.predict(X)]
+        iso_acc   = round(accuracy_score(y, iso_preds) * 100, 2)
+        iso_report = classification_report(y, iso_preds, output_dict=True)
+        print(f"Isolation Forest done — Accuracy: {iso_acc}%")
 
-@app.route('/logout')
+        # ── Model 2: Logistic Regression (~5 seconds) ─────
+        print("Training Logistic Regression...")
+        lr = LogisticRegression(max_iter=1000, random_state=42)
+        lr.fit(X, y)
+        lr_preds  = lr.predict(X)
+        lr_acc    = round(accuracy_score(y, lr_preds) * 100, 2)
+        lr_report = classification_report(y, lr_preds, output_dict=True)
+        print(f"Logistic Regression done — Accuracy: {lr_acc}%")
+
+        # ── Model 3: SVM (~30 seconds on 2000 rows) ───────
+        print("Training SVM...")
+        svm_sample = sample.sample(n=min(2000, len(sample)), random_state=42)
+        X_s = svm_sample.drop(columns=["Class"])
+        y_s = svm_sample["Class"]
+        svm = SVC(random_state=42)
+        svm.fit(X_s, y_s)
+        svm_preds  = svm.predict(X_s)
+        svm_acc    = round(accuracy_score(y_s, svm_preds) * 100, 2)
+        svm_report = classification_report(y_s, svm_preds, output_dict=True)
+        print(f"SVM done — Accuracy: {svm_acc}%")
+
+        print("All models done! Sending results...")
+
+        return resp({
+            "status": "success",
+            "summary": {
+                "total_transactions":   total_transactions,
+                "fraudulent_count":     fraudulent_count,
+                "non_fraudulent_count": non_fraudulent_count
+            },
+            "models": {
+                "isolation_forest": {
+                    "accuracy_percent": iso_acc,
+                    "precision": round(iso_report.get('1', {}).get('precision', 0), 4),
+                    "recall":    round(iso_report.get('1', {}).get('recall', 0), 4),
+                    "f1_score":  round(iso_report.get('1', {}).get('f1-score', 0), 4)
+                },
+                "logistic_regression": {
+                    "accuracy_percent": lr_acc,
+                    "precision": round(lr_report.get('1', {}).get('precision', 0), 4),
+                    "recall":    round(lr_report.get('1', {}).get('recall', 0), 4),
+                    "f1_score":  round(lr_report.get('1', {}).get('f1-score', 0), 4)
+                },
+                "svm": {
+                    "accuracy_percent": svm_acc,
+                    "note": "Trained on 2000-row sample for speed",
+                    "precision": round(svm_report.get('1', {}).get('precision', 0), 4),
+                    "recall":    round(svm_report.get('1', {}).get('recall', 0), 4),
+                    "f1_score":  round(svm_report.get('1', {}).get('f1-score', 0), 4)
+                }
+            }
+        })
+
+    except Exception as e:
+        print(f"Error: {str(e)}")
+        return resp({"status": "error", "message": str(e)}, 500)
+
+# ═══════════════════════════════════════════════════════
+#  ROUTE 5 — Logout  (clears session)
+#  METHOD: POST
+# ═══════════════════════════════════════════════════════
+@app.route('/logout', methods=['POST'])
 def logout():
-    session.pop('username', None)
-    return redirect(url_for('index'))
+    session.clear()
+    return resp({"status": "success", "message": "Logged out"})
+# ═══════════════════════════════════════════════════════
+#  ROUTE — Predict Single Transaction
+#  METHOD: POST
+#  BODY (JSON): { "amount": 150.0, "time": 50000, "v1": -1.35, ... }
+#  RETURNS: prediction from all 3 models
+# ═══════════════════════════════════════════════════════
+@app.route('/predict_single', methods=['POST'])
+def predict_single():
+    try:
+        data = request.get_json()
+        if not data:
+            return resp({"status": "error", "message": "No data received"}, 400)
 
+        sample_path = os.path.join('data', 'creditcard.csv')
+        if not os.path.exists(sample_path):
+            return resp({
+                "status": "error",
+                "message": "Training data not found on server."
+            }, 400)
+
+        print("Loading dataset for single prediction...")
+        train_df = pd.read_csv(sample_path)
+
+        # Use ALL fraud rows + equal normal rows for balanced training
+        fraud_rows  = train_df[train_df['Class'] == 1]
+        normal_rows = train_df[train_df['Class'] == 0].sample(
+                        n=len(fraud_rows), random_state=42)
+        sample = pd.concat([fraud_rows, normal_rows]).sample(
+                        frac=1, random_state=42)
+
+        X_train = sample.drop(columns=['Class'])
+        y_train = sample['Class']
+
+        # Build input row — get ALL 28 V features from request
+        row = {}
+        row['Time']   = float(data.get('time',   50000))
+        row['Amount'] = float(data.get('amount', 0.0))
+
+        # Fill all V1-V28 from request, default to 0.0
+        for i in range(1, 29):
+            key_lower = f'v{i}'
+            key_upper = f'V{i}'
+            if key_lower in data:
+                row[key_upper] = float(data[key_lower])
+            elif key_upper in data:
+                row[key_upper] = float(data[key_upper])
+            else:
+                row[key_upper] = 0.0
+
+        # Input as DataFrame with same column order as training
+        X_input = pd.DataFrame([row])[X_train.columns]
+
+        print(f"Input row: Amount={row['Amount']}, Time={row['Time']}")
+        print(f"Training on {len(sample)} balanced rows...")
+
+        results = {}
+
+        # Isolation Forest
+        print("Running Isolation Forest...")
+        iso = IsolationForest(
+            n_estimators=100,
+            contamination=0.5,  # 50% since our sample is balanced
+            random_state=42
+        )
+        iso.fit(X_train)
+        iso_pred  = iso.predict(X_input)[0]
+        iso_score = iso.decision_function(X_input)[0]
+        iso_label = "FRAUD" if iso_pred == -1 else "SAFE"
+        iso_conf  = round(float(abs(iso_score) * 100), 1)
+        iso_conf  = min(99.9, max(50.0, iso_conf))
+        results['isolation_forest'] = {
+            "prediction": iso_label,
+            "confidence": iso_conf
+        }
+        print(f"Isolation Forest: {iso_label} (score={iso_score:.4f})")
+
+        # Logistic Regression
+        print("Running Logistic Regression...")
+        from sklearn.preprocessing import StandardScaler
+        scaler = StandardScaler()
+        X_train_scaled = scaler.fit_transform(X_train)
+        X_input_scaled = scaler.transform(X_input)
+
+        lr = LogisticRegression(max_iter=1000, random_state=42)
+        lr.fit(X_train_scaled, y_train)
+        lr_pred  = lr.predict(X_input_scaled)[0]
+        lr_proba = lr.predict_proba(X_input_scaled)[0]
+        lr_label = "FRAUD" if lr_pred == 1 else "SAFE"
+        lr_conf  = round(float(max(lr_proba)) * 100, 1)
+        results['logistic_regression'] = {
+            "prediction": lr_label,
+            "confidence": lr_conf
+        }
+        print(f"Logistic Regression: {lr_label} ({lr_conf}%)")
+
+        # SVM
+        print("Running SVM...")
+        svm = SVC(probability=True, kernel='rbf', random_state=42)
+        svm.fit(X_train_scaled, y_train)
+        svm_pred  = svm.predict(X_input_scaled)[0]
+        svm_proba = svm.predict_proba(X_input_scaled)[0]
+        svm_label = "FRAUD" if svm_pred == 1 else "SAFE"
+        svm_conf  = round(float(max(svm_proba)) * 100, 1)
+        results['svm'] = {
+            "prediction": svm_label,
+            "confidence": svm_conf
+        }
+        print(f"SVM: {svm_label} ({svm_conf}%)")
+
+        # Majority vote
+        fraud_votes = sum(1 for m in results.values()
+                         if m['prediction'] == 'FRAUD')
+        overall = "FRAUD" if fraud_votes >= 2 else "SAFE"
+        print(f"Final verdict: {overall} ({fraud_votes}/3 votes)")
+
+        return resp({
+            "status":      "success",
+            "overall":     overall,
+            "fraud_votes": fraud_votes,
+            "models":      results
+        })
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return resp({"status": "error", "message": str(e)}, 500)
+# ─────────────────────────────────────────
+#  START THE SERVER
+# ─────────────────────────────────────────
 if __name__ == '__main__':
-    app.run(debug=True)
+    # host='0.0.0.0' means Flask is accessible from other devices
+    # on the same WiFi (important for Android to reach it!)
+    app.run(debug=True, host='0.0.0.0', port=5000)
