@@ -1,14 +1,15 @@
 import pandas as pd
 import os
+import gc
 from dotenv import load_dotenv
 from flask import Flask, request, session, jsonify
 from flask_cors import CORS
 from pymongo import MongoClient
 import bcrypt
 from sklearn.ensemble import IsolationForest
-from sklearn.svm import SVC
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, classification_report
+from sklearn.preprocessing import StandardScaler
 import io
 
 # ─────────────────────────────────────────
@@ -16,8 +17,6 @@ import io
 # ─────────────────────────────────────────
 app = Flask(__name__)
 app.secret_key = b'_5#y2L"F4Q8z\n\xec]/'
-
-# CORS lets your Android app talk to Flask from a different device/IP
 CORS(app)
 
 load_dotenv()
@@ -32,7 +31,7 @@ collection = db['users']
 
 
 # ─────────────────────────────────────────
-#  HELPER — build a clean JSON response
+#  HELPER
 # ─────────────────────────────────────────
 def resp(data: dict, status: int = 200):
     return jsonify(data), status
@@ -48,13 +47,10 @@ def index():
 
 # ═══════════════════════════════════════════════════════
 #  ROUTE 2 — Register
-#  METHOD: POST
-#  BODY (JSON): { "username": "...", "email": "...", "password": "..." }
 # ═══════════════════════════════════════════════════════
 @app.route('/register', methods=['POST'])
 def register():
     data = request.get_json()
-
     if not data:
         return resp({"status": "error", "message": "No data received"}, 400)
 
@@ -72,25 +68,16 @@ def register():
         return resp({"status": "error", "message": "Email already exists"}, 409)
 
     hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
-
-    collection.insert_one({
-        'username': username,
-        'password': hashed_password,
-        'email':    email
-    })
-
+    collection.insert_one({'username': username, 'password': hashed_password, 'email': email})
     return resp({"status": "success", "message": "User registered successfully"}, 201)
 
 
 # ═══════════════════════════════════════════════════════
 #  ROUTE 3 — Login
-#  METHOD: POST
-#  BODY (JSON): { "username": "...", "password": "..." }
 # ═══════════════════════════════════════════════════════
 @app.route('/login', methods=['POST'])
 def login():
     data = request.get_json()
-
     if not data:
         return resp({"status": "error", "message": "No data received"}, 400)
 
@@ -100,12 +87,10 @@ def login():
     if not username or not password:
         return resp({"status": "error", "message": "Missing fields"}, 400)
 
-    # Dummy login for quick testing
     if username == 'dummy' and password == 'dummy':
         return resp({"status": "success", "username": "Demo User"})
 
     user = collection.find_one({'username': username})
-
     if user and bcrypt.checkpw(password.encode('utf-8'), user['password']):
         return resp({"status": "success", "username": user['username']})
     else:
@@ -114,8 +99,8 @@ def login():
 
 # ═══════════════════════════════════════════════════════
 #  ROUTE 4 — Predict (CSV upload)
-#  METHOD: POST
-#  BODY: multipart/form-data → key="file", value=<CSV file>
+#  MEMORY OPTIMIZED — uses small sample, no SVM
+#  SVM removed because it uses too much RAM on free plan
 # ═══════════════════════════════════════════════════════
 @app.route('/predict', methods=['POST'])
 def predict():
@@ -123,7 +108,6 @@ def predict():
         return resp({"status": "error", "message": "No file uploaded"}, 400)
 
     file = request.files['file']
-
     if file.filename == '':
         return resp({"status": "error", "message": "No file selected"}, 400)
 
@@ -132,60 +116,64 @@ def predict():
         data = pd.read_csv(io.BytesIO(content))
 
         if 'Class' not in data.columns:
-            return resp({
-                "status": "error",
-                "message": "CSV must have a 'Class' column"
-            }, 400)
+            return resp({"status": "error", "message": "CSV must have a 'Class' column"}, 400)
 
         total_transactions   = len(data)
         fraudulent_count     = int((data['Class'] == 1).sum())
         non_fraudulent_count = int((data['Class'] == 0).sum())
 
-        print(f"Dataset loaded: {total_transactions} rows, {fraudulent_count} fraud cases")
+        print(f"Dataset: {total_transactions} rows, {fraudulent_count} fraud")
 
+        # ── Use very small sample to save memory ──────────
         fraud_data  = data[data['Class'] == 1]
         normal_data = data[data['Class'] == 0].sample(
-                        n=min(9508, len(data[data['Class'] == 0])),
+                        n=min(500, len(data[data['Class'] == 0])),
                         random_state=42)
-        sample = pd.concat([fraud_data, normal_data]).sample(
-                        frac=1, random_state=42)
+        sample = pd.concat([fraud_data, normal_data]).sample(frac=1, random_state=42)
+
+        # Free original data from memory immediately
+        del data
+        gc.collect()
 
         X = sample.drop(columns=["Class"])
         y = sample["Class"]
 
-        print(f"Training on {len(sample)} rows...")
+        print(f"Training on {len(sample)} rows (memory optimized)...")
 
-        # Isolation Forest
+        # ── Model 1: Isolation Forest ──────────────────────
         print("Training Isolation Forest...")
-        iso = IsolationForest(random_state=42, contamination=0.05)
+        iso = IsolationForest(
+            n_estimators=50,  # reduced from 100 to save memory
+            random_state=42,
+            contamination=0.05
+        )
         iso.fit(X)
         iso_preds  = [0 if p == 1 else 1 for p in iso.predict(X)]
         iso_acc    = round(accuracy_score(y, iso_preds) * 100, 2)
         iso_report = classification_report(y, iso_preds, output_dict=True)
-        print(f"Isolation Forest done — Accuracy: {iso_acc}%")
+        print(f"Isolation Forest: {iso_acc}%")
 
-        # Logistic Regression
+        # Free model from memory
+        del iso
+        gc.collect()
+
+        # ── Model 2: Logistic Regression ──────────────────
         print("Training Logistic Regression...")
-        lr = LogisticRegression(max_iter=1000, random_state=42)
-        lr.fit(X, y)
-        lr_preds  = lr.predict(X)
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X)
+
+        lr = LogisticRegression(max_iter=500, random_state=42)
+        lr.fit(X_scaled, y)
+        lr_preds  = lr.predict(X_scaled)
         lr_acc    = round(accuracy_score(y, lr_preds) * 100, 2)
         lr_report = classification_report(y, lr_preds, output_dict=True)
-        print(f"Logistic Regression done — Accuracy: {lr_acc}%")
+        print(f"Logistic Regression: {lr_acc}%")
 
-        # SVM
-        print("Training SVM...")
-        svm_sample = sample.sample(n=min(2000, len(sample)), random_state=42)
-        X_s = svm_sample.drop(columns=["Class"])
-        y_s = svm_sample["Class"]
-        svm = SVC(random_state=42)
-        svm.fit(X_s, y_s)
-        svm_preds  = svm.predict(X_s)
-        svm_acc    = round(accuracy_score(y_s, svm_preds) * 100, 2)
-        svm_report = classification_report(y_s, svm_preds, output_dict=True)
-        print(f"SVM done — Accuracy: {svm_acc}%")
+        # Free memory
+        del lr, scaler, X_scaled, X, y, sample
+        gc.collect()
 
-        print("All models done! Sending results...")
+        print("Done! Sending results...")
 
         return resp({
             "status": "success",
@@ -208,11 +196,11 @@ def predict():
                     "f1_score":  round(lr_report.get('1', {}).get('f1-score', 0), 4)
                 },
                 "svm": {
-                    "accuracy_percent": svm_acc,
-                    "note": "Trained on 2000-row sample for speed",
-                    "precision": round(svm_report.get('1', {}).get('precision', 0), 4),
-                    "recall":    round(svm_report.get('1', {}).get('recall', 0), 4),
-                    "f1_score":  round(svm_report.get('1', {}).get('f1-score', 0), 4)
+                    "accuracy_percent": 0,
+                    "note": "SVM disabled on free plan to save memory",
+                    "precision": 0,
+                    "recall":    0,
+                    "f1_score":  0
                 }
             }
         })
@@ -224,7 +212,6 @@ def predict():
 
 # ═══════════════════════════════════════════════════════
 #  ROUTE 5 — Logout
-#  METHOD: POST
 # ═══════════════════════════════════════════════════════
 @app.route('/logout', methods=['POST'])
 def logout():
@@ -234,8 +221,7 @@ def logout():
 
 # ═══════════════════════════════════════════════════════
 #  ROUTE 6 — Predict Single Transaction
-#  METHOD: POST
-#  BODY (JSON): { "amount": 150.0, "time": 50000, "v1": -1.35, ... }
+#  MEMORY OPTIMIZED — no SVM
 # ═══════════════════════════════════════════════════════
 @app.route('/predict_single', methods=['POST'])
 def predict_single():
@@ -245,21 +231,19 @@ def predict_single():
             return resp({"status": "error", "message": "No data received"}, 400)
 
         sample_path = os.path.join('data', 'creditcard.csv')
-
         if not os.path.exists(sample_path):
-            return resp({
-                "status": "error",
-                "message": "Training data not found on server."
-            }, 400)
+            return resp({"status": "error", "message": "Training data not found on server."}, 400)
 
-        print("Loading dataset for single prediction...")
+        print("Loading dataset...")
         train_df = pd.read_csv(sample_path)
 
         fraud_rows  = train_df[train_df['Class'] == 1]
         normal_rows = train_df[train_df['Class'] == 0].sample(
                         n=len(fraud_rows), random_state=42)
-        sample = pd.concat([fraud_rows, normal_rows]).sample(
-                        frac=1, random_state=42)
+        sample = pd.concat([fraud_rows, normal_rows]).sample(frac=1, random_state=42)
+
+        del train_df
+        gc.collect()
 
         X_train = sample.drop(columns=['Class'])
         y_train = sample['Class']
@@ -267,7 +251,6 @@ def predict_single():
         row = {}
         row['Time']   = float(data.get('time',   50000))
         row['Amount'] = float(data.get('amount', 0.0))
-
         for i in range(1, 29):
             key_lower = f'v{i}'
             key_upper = f'V{i}'
@@ -280,52 +263,42 @@ def predict_single():
 
         X_input = pd.DataFrame([row])[X_train.columns]
 
-        print(f"Input: Amount={row['Amount']}, Time={row['Time']}")
-        print(f"Training on {len(sample)} balanced rows...")
-
         results = {}
 
         # Isolation Forest
         print("Running Isolation Forest...")
-        iso = IsolationForest(n_estimators=100, contamination=0.5, random_state=42)
+        iso = IsolationForest(n_estimators=50, contamination=0.5, random_state=42)
         iso.fit(X_train)
         iso_pred  = iso.predict(X_input)[0]
         iso_score = iso.decision_function(X_input)[0]
         iso_label = "FRAUD" if iso_pred == -1 else "SAFE"
         iso_conf  = min(99.9, max(50.0, round(float(abs(iso_score) * 100), 1)))
         results['isolation_forest'] = {"prediction": iso_label, "confidence": iso_conf}
-        print(f"Isolation Forest: {iso_label}")
+        del iso
+        gc.collect()
 
         # Logistic Regression
         print("Running Logistic Regression...")
-        from sklearn.preprocessing import StandardScaler
         scaler = StandardScaler()
         X_train_scaled = scaler.fit_transform(X_train)
         X_input_scaled = scaler.transform(X_input)
 
-        lr = LogisticRegression(max_iter=1000, random_state=42)
+        lr = LogisticRegression(max_iter=500, random_state=42)
         lr.fit(X_train_scaled, y_train)
         lr_pred  = lr.predict(X_input_scaled)[0]
         lr_proba = lr.predict_proba(X_input_scaled)[0]
         lr_label = "FRAUD" if lr_pred == 1 else "SAFE"
         lr_conf  = round(float(max(lr_proba)) * 100, 1)
         results['logistic_regression'] = {"prediction": lr_label, "confidence": lr_conf}
-        print(f"Logistic Regression: {lr_label}")
+        del lr, scaler, X_train_scaled, X_input_scaled
+        gc.collect()
 
-        # SVM
-        print("Running SVM...")
-        svm = SVC(probability=True, kernel='rbf', random_state=42)
-        svm.fit(X_train_scaled, y_train)
-        svm_pred  = svm.predict(X_input_scaled)[0]
-        svm_proba = svm.predict_proba(X_input_scaled)[0]
-        svm_label = "FRAUD" if svm_pred == 1 else "SAFE"
-        svm_conf  = round(float(max(svm_proba)) * 100, 1)
-        results['svm'] = {"prediction": svm_label, "confidence": svm_conf}
-        print(f"SVM: {svm_label}")
+        # SVM disabled to save memory
+        results['svm'] = {"prediction": "N/A", "confidence": 0}
 
-        fraud_votes = sum(1 for m in results.values() if m['prediction'] == 'FRAUD')
-        overall = "FRAUD" if fraud_votes >= 2 else "SAFE"
-        print(f"Final verdict: {overall} ({fraud_votes}/3 votes)")
+        fraud_votes = sum(1 for k, m in results.items()
+                         if k != 'svm' and m['prediction'] == 'FRAUD')
+        overall = "FRAUD" if fraud_votes >= 1 else "SAFE"
 
         return resp({
             "status":      "success",
