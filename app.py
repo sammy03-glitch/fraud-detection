@@ -23,11 +23,19 @@ load_dotenv()
 MONGO_URI = os.getenv("MONGO_URI")
 
 # ─────────────────────────────────────────
-#  DATABASE CONNECTION
+#  LAZY DATABASE CONNECTION
+#  Only connects when first needed
+#  Saves memory on startup
 # ─────────────────────────────────────────
-client = MongoClient(MONGO_URI)
-db = client['user_database']
-collection = db['users']
+_client = None
+
+def get_collection():
+    global _client
+    if _client is None:
+        print("Connecting to MongoDB...")
+        _client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=10000)
+        print("MongoDB connected!")
+    return _client['user_database']['users']
 
 
 # ─────────────────────────────────────────
@@ -50,26 +58,34 @@ def index():
 # ═══════════════════════════════════════════════════════
 @app.route('/register', methods=['POST'])
 def register():
-    data = request.get_json()
-    if not data:
-        return resp({"status": "error", "message": "No data received"}, 400)
+    try:
+        data = request.get_json()
+        if not data:
+            return resp({"status": "error", "message": "No data received"}, 400)
 
-    username = data.get('username', '').strip()
-    password = data.get('password', '').strip()
-    email    = data.get('email', '').strip()
+        username = data.get('username', '').strip()
+        password = data.get('password', '').strip()
+        email    = data.get('email', '').strip()
 
-    if not username or not password or not email:
-        return resp({"status": "error", "message": "Missing fields"}, 400)
+        if not username or not password or not email:
+            return resp({"status": "error", "message": "Missing fields"}, 400)
 
-    if collection.find_one({'username': username}):
-        return resp({"status": "error", "message": "Username already exists"}, 409)
+        col = get_collection()
 
-    if collection.find_one({'email': email}):
-        return resp({"status": "error", "message": "Email already exists"}, 409)
+        if col.find_one({'username': username}):
+            return resp({"status": "error", "message": "Username already exists"}, 409)
 
-    hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
-    collection.insert_one({'username': username, 'password': hashed_password, 'email': email})
-    return resp({"status": "success", "message": "User registered successfully"}, 201)
+        if col.find_one({'email': email}):
+            return resp({"status": "error", "message": "Email already exists"}, 409)
+
+        hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
+        col.insert_one({'username': username, 'password': hashed_password, 'email': email})
+
+        return resp({"status": "success", "message": "User registered successfully"}, 201)
+
+    except Exception as e:
+        print(f"Register error: {str(e)}")
+        return resp({"status": "error", "message": str(e)}, 500)
 
 
 # ═══════════════════════════════════════════════════════
@@ -77,30 +93,37 @@ def register():
 # ═══════════════════════════════════════════════════════
 @app.route('/login', methods=['POST'])
 def login():
-    data = request.get_json()
-    if not data:
-        return resp({"status": "error", "message": "No data received"}, 400)
+    try:
+        data = request.get_json()
+        if not data:
+            return resp({"status": "error", "message": "No data received"}, 400)
 
-    username = data.get('username', '').strip()
-    password = data.get('password', '').strip()
+        username = data.get('username', '').strip()
+        password = data.get('password', '').strip()
 
-    if not username or not password:
-        return resp({"status": "error", "message": "Missing fields"}, 400)
+        if not username or not password:
+            return resp({"status": "error", "message": "Missing fields"}, 400)
 
-    if username == 'dummy' and password == 'dummy':
-        return resp({"status": "success", "username": "Demo User"})
+        # Dummy login for quick testing
+        if username == 'dummy' and password == 'dummy':
+            return resp({"status": "success", "username": "Demo User"})
 
-    user = collection.find_one({'username': username})
-    if user and bcrypt.checkpw(password.encode('utf-8'), user['password']):
-        return resp({"status": "success", "username": user['username']})
-    else:
-        return resp({"status": "error", "message": "Invalid username or password"}, 401)
+        col = get_collection()
+        user = col.find_one({'username': username})
+
+        if user and bcrypt.checkpw(password.encode('utf-8'), user['password']):
+            return resp({"status": "success", "username": user['username']})
+        else:
+            return resp({"status": "error", "message": "Invalid username or password"}, 401)
+
+    except Exception as e:
+        print(f"Login error: {str(e)}")
+        return resp({"status": "error", "message": str(e)}, 500)
 
 
 # ═══════════════════════════════════════════════════════
 #  ROUTE 4 — Predict (CSV upload)
-#  MEMORY OPTIMIZED — uses small sample, no SVM
-#  SVM removed because it uses too much RAM on free plan
+#  MEMORY OPTIMIZED — only 2 models, small sample
 # ═══════════════════════════════════════════════════════
 @app.route('/predict', methods=['POST'])
 def predict():
@@ -124,56 +147,51 @@ def predict():
 
         print(f"Dataset: {total_transactions} rows, {fraudulent_count} fraud")
 
-        # ── Use very small sample to save memory ──────────
+        # Very small sample to save memory
         fraud_data  = data[data['Class'] == 1]
         normal_data = data[data['Class'] == 0].sample(
                         n=min(500, len(data[data['Class'] == 0])),
                         random_state=42)
         sample = pd.concat([fraud_data, normal_data]).sample(frac=1, random_state=42)
 
-        # Free original data from memory immediately
         del data
         gc.collect()
 
         X = sample.drop(columns=["Class"])
         y = sample["Class"]
+        del sample
+        gc.collect()
 
-        print(f"Training on {len(sample)} rows (memory optimized)...")
+        print(f"Training on {len(X)} rows...")
 
-        # ── Model 1: Isolation Forest ──────────────────────
+        # Isolation Forest
         print("Training Isolation Forest...")
-        iso = IsolationForest(
-            n_estimators=50,  # reduced from 100 to save memory
-            random_state=42,
-            contamination=0.05
-        )
+        iso = IsolationForest(n_estimators=50, random_state=42, contamination=0.05)
         iso.fit(X)
         iso_preds  = [0 if p == 1 else 1 for p in iso.predict(X)]
         iso_acc    = round(accuracy_score(y, iso_preds) * 100, 2)
         iso_report = classification_report(y, iso_preds, output_dict=True)
+        del iso, iso_preds
+        gc.collect()
         print(f"Isolation Forest: {iso_acc}%")
 
-        # Free model from memory
-        del iso
-        gc.collect()
-
-        # ── Model 2: Logistic Regression ──────────────────
+        # Logistic Regression
         print("Training Logistic Regression...")
-        scaler = StandardScaler()
+        scaler   = StandardScaler()
         X_scaled = scaler.fit_transform(X)
+        del X
+        gc.collect()
 
         lr = LogisticRegression(max_iter=500, random_state=42)
         lr.fit(X_scaled, y)
         lr_preds  = lr.predict(X_scaled)
         lr_acc    = round(accuracy_score(y, lr_preds) * 100, 2)
         lr_report = classification_report(y, lr_preds, output_dict=True)
+        del lr, scaler, X_scaled, lr_preds, y
+        gc.collect()
         print(f"Logistic Regression: {lr_acc}%")
 
-        # Free memory
-        del lr, scaler, X_scaled, X, y, sample
-        gc.collect()
-
-        print("Done! Sending results...")
+        print("Done!")
 
         return resp({
             "status": "success",
@@ -206,7 +224,7 @@ def predict():
         })
 
     except Exception as e:
-        print(f"Error: {str(e)}")
+        print(f"Predict error: {str(e)}")
         return resp({"status": "error", "message": str(e)}, 500)
 
 
@@ -221,7 +239,7 @@ def logout():
 
 # ═══════════════════════════════════════════════════════
 #  ROUTE 6 — Predict Single Transaction
-#  MEMORY OPTIMIZED — no SVM
+#  MEMORY OPTIMIZED — only 2 models
 # ═══════════════════════════════════════════════════════
 @app.route('/predict_single', methods=['POST'])
 def predict_single():
@@ -241,12 +259,13 @@ def predict_single():
         normal_rows = train_df[train_df['Class'] == 0].sample(
                         n=len(fraud_rows), random_state=42)
         sample = pd.concat([fraud_rows, normal_rows]).sample(frac=1, random_state=42)
-
         del train_df
         gc.collect()
 
         X_train = sample.drop(columns=['Class'])
         y_train = sample['Class']
+        del sample
+        gc.collect()
 
         row = {}
         row['Time']   = float(data.get('time',   50000))
@@ -262,7 +281,6 @@ def predict_single():
                 row[key_upper] = 0.0
 
         X_input = pd.DataFrame([row])[X_train.columns]
-
         results = {}
 
         # Isolation Forest
@@ -279,9 +297,11 @@ def predict_single():
 
         # Logistic Regression
         print("Running Logistic Regression...")
-        scaler = StandardScaler()
+        scaler         = StandardScaler()
         X_train_scaled = scaler.fit_transform(X_train)
         X_input_scaled = scaler.transform(X_input)
+        del X_train
+        gc.collect()
 
         lr = LogisticRegression(max_iter=500, random_state=42)
         lr.fit(X_train_scaled, y_train)
@@ -293,7 +313,7 @@ def predict_single():
         del lr, scaler, X_train_scaled, X_input_scaled
         gc.collect()
 
-        # SVM disabled to save memory
+        # SVM disabled
         results['svm'] = {"prediction": "N/A", "confidence": 0}
 
         fraud_votes = sum(1 for k, m in results.items()
