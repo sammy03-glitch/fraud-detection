@@ -1,5 +1,6 @@
 Flask
 flask-cors
+pymongo[srv]
 pymongo
 python-dotenv
 bcrypt
