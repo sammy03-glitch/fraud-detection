@@ -8,4 +8,3 @@ pandas
 scikit-learn
 werkzeug
 gunicorn
-gdown

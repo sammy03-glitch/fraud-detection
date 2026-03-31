@@ -1,6 +1,5 @@
 import pandas as pd
 import os
-import gdown
 from dotenv import load_dotenv
 from flask import Flask, request, session, jsonify
 from flask_cors import CORS
@@ -12,29 +11,6 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, classification_report
 import io
 
-# ─────────────────────────────────────────
-#  AUTO-DOWNLOAD DATASET FROM GOOGLE DRIVE
-#  Runs once when server starts
-#  If file already exists, skips download
-# ─────────────────────────────────────────
-def download_dataset():
-    path = os.path.join('data', 'creditcard.csv')
-    if not os.path.exists(path):
-        os.makedirs('data', exist_ok=True)
-        print("Dataset not found — downloading from Google Drive...")
-        try:
-            gdown.download(
-                'https://drive.google.com/uc?id=1GNxFy8jlTZQLny81XoaYOqfQDQWNFQgh',
-                path,
-                quiet=False
-            )
-            print("Dataset downloaded successfully!")
-        except Exception as e:
-            print(f"Failed to download dataset: {e}")
-    else:
-        print("Dataset already exists — skipping download.")
-
-download_dataset()
 
 # ─────────────────────────────────────────
 #  APP SETUP
