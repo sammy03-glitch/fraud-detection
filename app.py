@@ -1,5 +1,6 @@
 import pandas as pd
 import os
+import gdown
 from dotenv import load_dotenv
 from flask import Flask, request, session, jsonify
 from flask_cors import CORS
@@ -10,6 +11,30 @@ from sklearn.svm import SVC
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, classification_report
 import io
+
+# ─────────────────────────────────────────
+#  AUTO-DOWNLOAD DATASET FROM GOOGLE DRIVE
+#  Runs once when server starts
+#  If file already exists, skips download
+# ─────────────────────────────────────────
+def download_dataset():
+    path = os.path.join('data', 'creditcard.csv')
+    if not os.path.exists(path):
+        os.makedirs('data', exist_ok=True)
+        print("Dataset not found — downloading from Google Drive...")
+        try:
+            gdown.download(
+                'https://drive.google.com/uc?id=1GNxFy8jlTZQLny81XoaYOqfQDQWNFQgh',
+                path,
+                quiet=False
+            )
+            print("Dataset downloaded successfully!")
+        except Exception as e:
+            print(f"Failed to download dataset: {e}")
+    else:
+        print("Dataset already exists — skipping download.")
+
+download_dataset()
 
 # ─────────────────────────────────────────
 #  APP SETUP
@@ -42,8 +67,6 @@ def resp(data: dict, status: int = 200):
 
 # ═══════════════════════════════════════════════════════
 #  ROUTE 1 — Home  (just a health check)
-#  OLD: return render_template('index.html')
-#  NEW: return JSON confirming the server is alive
 # ═══════════════════════════════════════════════════════
 @app.route('/')
 def index():
@@ -54,18 +77,11 @@ def index():
 #  ROUTE 2 — Register
 #  METHOD: POST
 #  BODY (JSON): { "username": "...", "email": "...", "password": "..." }
-#  RETURNS:
-#    201 → { "status": "success", "message": "User registered successfully" }
-#    409 → { "status": "error",   "message": "Username already exists" }
-#    409 → { "status": "error",   "message": "Email already exists" }
-#    400 → { "status": "error",   "message": "Missing fields" }
 # ═══════════════════════════════════════════════════════
 @app.route('/register', methods=['POST'])
 def register():
-    # Get JSON data sent by Android
     data = request.get_json()
 
-    # Validate — make sure all fields are present
     if not data:
         return resp({"status": "error", "message": "No data received"}, 400)
 
@@ -76,17 +92,14 @@ def register():
     if not username or not password or not email:
         return resp({"status": "error", "message": "Missing fields"}, 400)
 
-    # Check if username or email already exists in MongoDB
     if collection.find_one({'username': username}):
         return resp({"status": "error", "message": "Username already exists"}, 409)
 
     if collection.find_one({'email': email}):
         return resp({"status": "error", "message": "Email already exists"}, 409)
 
-    # Hash the password before saving (NEVER save plain-text passwords!)
     hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
 
-    # Save new user to MongoDB
     collection.insert_one({
         'username': username,
         'password': hashed_password,
@@ -100,10 +113,6 @@ def register():
 #  ROUTE 3 — Login
 #  METHOD: POST
 #  BODY (JSON): { "username": "...", "password": "..." }
-#  RETURNS:
-#    200 → { "status": "success", "username": "john" }
-#    401 → { "status": "error",   "message": "Invalid username or password" }
-#    400 → { "status": "error",   "message": "Missing fields" }
 # ═══════════════════════════════════════════════════════
 @app.route('/login', methods=['POST'])
 def login():
@@ -122,10 +131,8 @@ def login():
     if username == 'dummy' and password == 'dummy':
         return resp({"status": "success", "username": "Demo User"})
 
-    # Look up the user in MongoDB
     user = collection.find_one({'username': username})
 
-    # Check if user exists AND password matches the stored hash
     if user and bcrypt.checkpw(password.encode('utf-8'), user['password']):
         return resp({"status": "success", "username": user['username']})
     else:
@@ -133,11 +140,9 @@ def login():
 
 
 # ═══════════════════════════════════════════════════════
-#  ROUTE 4 — Predict (the main ML route)
+#  ROUTE 4 — Predict (CSV upload)
 #  METHOD: POST
-#  BODY: multipart/form-data  →  key="file", value=<CSV file>
-#        + form field          →  key="username", value="john"
-#  RETURNS: JSON with results from all 3 ML models
+#  BODY: multipart/form-data → key="file", value=<CSV file>
 # ═══════════════════════════════════════════════════════
 @app.route('/predict', methods=['POST'])
 def predict():
@@ -166,30 +171,29 @@ def predict():
 
         print(f"Dataset loaded: {total_transactions} rows, {fraudulent_count} fraud cases")
 
-        # ── Use a sample for training — much faster! ──────
-        # We take 10,000 rows but keep ALL fraud cases so models learn properly
-        fraud_data     = data[data['Class'] == 1]          # all 492 fraud rows
-        normal_data    = data[data['Class'] == 0].sample(  # 9508 normal rows
-                            n=min(9508, len(data[data['Class'] == 0])),
-                            random_state=42)
+        # ── Use a sample for training ──────────────────────
+        fraud_data  = data[data['Class'] == 1]
+        normal_data = data[data['Class'] == 0].sample(
+                        n=min(9508, len(data[data['Class'] == 0])),
+                        random_state=42)
         sample = pd.concat([fraud_data, normal_data]).sample(
-                            frac=1, random_state=42)       # shuffle
+                        frac=1, random_state=42)
 
         X = sample.drop(columns=["Class"])
         y = sample["Class"]
 
-        print(f"Training on {len(sample)} rows (all fraud + sample of normal)...")
+        print(f"Training on {len(sample)} rows...")
 
-        # ── Model 1: Isolation Forest (~10 seconds) ───────
+        # ── Model 1: Isolation Forest ──────────────────────
         print("Training Isolation Forest...")
         iso = IsolationForest(random_state=42, contamination=0.05)
         iso.fit(X)
-        iso_preds = [0 if p == 1 else 1 for p in iso.predict(X)]
-        iso_acc   = round(accuracy_score(y, iso_preds) * 100, 2)
+        iso_preds  = [0 if p == 1 else 1 for p in iso.predict(X)]
+        iso_acc    = round(accuracy_score(y, iso_preds) * 100, 2)
         iso_report = classification_report(y, iso_preds, output_dict=True)
         print(f"Isolation Forest done — Accuracy: {iso_acc}%")
 
-        # ── Model 2: Logistic Regression (~5 seconds) ─────
+        # ── Model 2: Logistic Regression ──────────────────
         print("Training Logistic Regression...")
         lr = LogisticRegression(max_iter=1000, random_state=42)
         lr.fit(X, y)
@@ -198,7 +202,7 @@ def predict():
         lr_report = classification_report(y, lr_preds, output_dict=True)
         print(f"Logistic Regression done — Accuracy: {lr_acc}%")
 
-        # ── Model 3: SVM (~30 seconds on 2000 rows) ───────
+        # ── Model 3: SVM ───────────────────────────────────
         print("Training SVM...")
         svm_sample = sample.sample(n=min(2000, len(sample)), random_state=42)
         X_s = svm_sample.drop(columns=["Class"])
@@ -246,19 +250,21 @@ def predict():
         print(f"Error: {str(e)}")
         return resp({"status": "error", "message": str(e)}, 500)
 
+
 # ═══════════════════════════════════════════════════════
-#  ROUTE 5 — Logout  (clears session)
+#  ROUTE 5 — Logout
 #  METHOD: POST
 # ═══════════════════════════════════════════════════════
 @app.route('/logout', methods=['POST'])
 def logout():
     session.clear()
     return resp({"status": "success", "message": "Logged out"})
+
+
 # ═══════════════════════════════════════════════════════
-#  ROUTE — Predict Single Transaction
+#  ROUTE 6 — Predict Single Transaction
 #  METHOD: POST
 #  BODY (JSON): { "amount": 150.0, "time": 50000, "v1": -1.35, ... }
-#  RETURNS: prediction from all 3 models
 # ═══════════════════════════════════════════════════════
 @app.route('/predict_single', methods=['POST'])
 def predict_single():
@@ -268,16 +274,22 @@ def predict_single():
             return resp({"status": "error", "message": "No data received"}, 400)
 
         sample_path = os.path.join('data', 'creditcard.csv')
+
+        # Try to download if missing
+        if not os.path.exists(sample_path):
+            print("Dataset missing — attempting download...")
+            download_dataset()
+
+        # Check again after download attempt
         if not os.path.exists(sample_path):
             return resp({
                 "status": "error",
-                "message": "Training data not found on server."
+                "message": "Training data not available. Please try again in a minute."
             }, 400)
 
         print("Loading dataset for single prediction...")
         train_df = pd.read_csv(sample_path)
 
-        # Use ALL fraud rows + equal normal rows for balanced training
         fraud_rows  = train_df[train_df['Class'] == 1]
         normal_rows = train_df[train_df['Class'] == 0].sample(
                         n=len(fraud_rows), random_state=42)
@@ -287,12 +299,10 @@ def predict_single():
         X_train = sample.drop(columns=['Class'])
         y_train = sample['Class']
 
-        # Build input row — get ALL 28 V features from request
         row = {}
         row['Time']   = float(data.get('time',   50000))
         row['Amount'] = float(data.get('amount', 0.0))
 
-        # Fill all V1-V28 from request, default to 0.0
         for i in range(1, 29):
             key_lower = f'v{i}'
             key_upper = f'V{i}'
@@ -303,7 +313,6 @@ def predict_single():
             else:
                 row[key_upper] = 0.0
 
-        # Input as DataFrame with same column order as training
         X_input = pd.DataFrame([row])[X_train.columns]
 
         print(f"Input row: Amount={row['Amount']}, Time={row['Time']}")
@@ -315,7 +324,7 @@ def predict_single():
         print("Running Isolation Forest...")
         iso = IsolationForest(
             n_estimators=100,
-            contamination=0.5,  # 50% since our sample is balanced
+            contamination=0.5,
             random_state=42
         )
         iso.fit(X_train)
@@ -363,7 +372,6 @@ def predict_single():
         }
         print(f"SVM: {svm_label} ({svm_conf}%)")
 
-        # Majority vote
         fraud_votes = sum(1 for m in results.values()
                          if m['prediction'] == 'FRAUD')
         overall = "FRAUD" if fraud_votes >= 2 else "SAFE"
@@ -380,10 +388,10 @@ def predict_single():
         import traceback
         traceback.print_exc()
         return resp({"status": "error", "message": str(e)}, 500)
+
+
 # ─────────────────────────────────────────
 #  START THE SERVER
 # ─────────────────────────────────────────
 if __name__ == '__main__':
-    # host='0.0.0.0' means Flask is accessible from other devices
-    # on the same WiFi (important for Android to reach it!)
     app.run(debug=True, host='0.0.0.0', port=5000)
