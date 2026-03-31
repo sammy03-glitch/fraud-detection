@@ -11,7 +11,6 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, classification_report
 import io
 
-
 # ─────────────────────────────────────────
 #  APP SETUP
 # ─────────────────────────────────────────
@@ -19,7 +18,6 @@ app = Flask(__name__)
 app.secret_key = b'_5#y2L"F4Q8z\n\xec]/'
 
 # CORS lets your Android app talk to Flask from a different device/IP
-# Without this, Android's HTTP requests would be blocked
 CORS(app)
 
 load_dotenv()
@@ -37,12 +35,11 @@ collection = db['users']
 #  HELPER — build a clean JSON response
 # ─────────────────────────────────────────
 def resp(data: dict, status: int = 200):
-    """Shortcut to return a JSON response with a status code."""
     return jsonify(data), status
 
 
 # ═══════════════════════════════════════════════════════
-#  ROUTE 1 — Home  (just a health check)
+#  ROUTE 1 — Home
 # ═══════════════════════════════════════════════════════
 @app.route('/')
 def index():
@@ -103,7 +100,7 @@ def login():
     if not username or not password:
         return resp({"status": "error", "message": "Missing fields"}, 400)
 
-    # Allow dummy/demo login for quick testing (no DB needed)
+    # Dummy login for quick testing
     if username == 'dummy' and password == 'dummy':
         return resp({"status": "success", "username": "Demo User"})
 
@@ -140,14 +137,12 @@ def predict():
                 "message": "CSV must have a 'Class' column"
             }, 400)
 
-        # ── Basic statistics (full dataset) ──────────────
         total_transactions   = len(data)
         fraudulent_count     = int((data['Class'] == 1).sum())
         non_fraudulent_count = int((data['Class'] == 0).sum())
 
         print(f"Dataset loaded: {total_transactions} rows, {fraudulent_count} fraud cases")
 
-        # ── Use a sample for training ──────────────────────
         fraud_data  = data[data['Class'] == 1]
         normal_data = data[data['Class'] == 0].sample(
                         n=min(9508, len(data[data['Class'] == 0])),
@@ -160,7 +155,7 @@ def predict():
 
         print(f"Training on {len(sample)} rows...")
 
-        # ── Model 1: Isolation Forest ──────────────────────
+        # Isolation Forest
         print("Training Isolation Forest...")
         iso = IsolationForest(random_state=42, contamination=0.05)
         iso.fit(X)
@@ -169,7 +164,7 @@ def predict():
         iso_report = classification_report(y, iso_preds, output_dict=True)
         print(f"Isolation Forest done — Accuracy: {iso_acc}%")
 
-        # ── Model 2: Logistic Regression ──────────────────
+        # Logistic Regression
         print("Training Logistic Regression...")
         lr = LogisticRegression(max_iter=1000, random_state=42)
         lr.fit(X, y)
@@ -178,7 +173,7 @@ def predict():
         lr_report = classification_report(y, lr_preds, output_dict=True)
         print(f"Logistic Regression done — Accuracy: {lr_acc}%")
 
-        # ── Model 3: SVM ───────────────────────────────────
+        # SVM
         print("Training SVM...")
         svm_sample = sample.sample(n=min(2000, len(sample)), random_state=42)
         X_s = svm_sample.drop(columns=["Class"])
@@ -251,16 +246,10 @@ def predict_single():
 
         sample_path = os.path.join('data', 'creditcard.csv')
 
-        # Try to download if missing
-        if not os.path.exists(sample_path):
-            print("Dataset missing — attempting download...")
-            download_dataset()
-
-        # Check again after download attempt
         if not os.path.exists(sample_path):
             return resp({
                 "status": "error",
-                "message": "Training data not available. Please try again in a minute."
+                "message": "Training data not found on server."
             }, 400)
 
         print("Loading dataset for single prediction...")
@@ -291,29 +280,21 @@ def predict_single():
 
         X_input = pd.DataFrame([row])[X_train.columns]
 
-        print(f"Input row: Amount={row['Amount']}, Time={row['Time']}")
+        print(f"Input: Amount={row['Amount']}, Time={row['Time']}")
         print(f"Training on {len(sample)} balanced rows...")
 
         results = {}
 
         # Isolation Forest
         print("Running Isolation Forest...")
-        iso = IsolationForest(
-            n_estimators=100,
-            contamination=0.5,
-            random_state=42
-        )
+        iso = IsolationForest(n_estimators=100, contamination=0.5, random_state=42)
         iso.fit(X_train)
         iso_pred  = iso.predict(X_input)[0]
         iso_score = iso.decision_function(X_input)[0]
         iso_label = "FRAUD" if iso_pred == -1 else "SAFE"
-        iso_conf  = round(float(abs(iso_score) * 100), 1)
-        iso_conf  = min(99.9, max(50.0, iso_conf))
-        results['isolation_forest'] = {
-            "prediction": iso_label,
-            "confidence": iso_conf
-        }
-        print(f"Isolation Forest: {iso_label} (score={iso_score:.4f})")
+        iso_conf  = min(99.9, max(50.0, round(float(abs(iso_score) * 100), 1)))
+        results['isolation_forest'] = {"prediction": iso_label, "confidence": iso_conf}
+        print(f"Isolation Forest: {iso_label}")
 
         # Logistic Regression
         print("Running Logistic Regression...")
@@ -328,11 +309,8 @@ def predict_single():
         lr_proba = lr.predict_proba(X_input_scaled)[0]
         lr_label = "FRAUD" if lr_pred == 1 else "SAFE"
         lr_conf  = round(float(max(lr_proba)) * 100, 1)
-        results['logistic_regression'] = {
-            "prediction": lr_label,
-            "confidence": lr_conf
-        }
-        print(f"Logistic Regression: {lr_label} ({lr_conf}%)")
+        results['logistic_regression'] = {"prediction": lr_label, "confidence": lr_conf}
+        print(f"Logistic Regression: {lr_label}")
 
         # SVM
         print("Running SVM...")
@@ -342,14 +320,10 @@ def predict_single():
         svm_proba = svm.predict_proba(X_input_scaled)[0]
         svm_label = "FRAUD" if svm_pred == 1 else "SAFE"
         svm_conf  = round(float(max(svm_proba)) * 100, 1)
-        results['svm'] = {
-            "prediction": svm_label,
-            "confidence": svm_conf
-        }
-        print(f"SVM: {svm_label} ({svm_conf}%)")
+        results['svm'] = {"prediction": svm_label, "confidence": svm_conf}
+        print(f"SVM: {svm_label}")
 
-        fraud_votes = sum(1 for m in results.values()
-                         if m['prediction'] == 'FRAUD')
+        fraud_votes = sum(1 for m in results.values() if m['prediction'] == 'FRAUD')
         overall = "FRAUD" if fraud_votes >= 2 else "SAFE"
         print(f"Final verdict: {overall} ({fraud_votes}/3 votes)")
 
